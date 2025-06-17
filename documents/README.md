@@ -17,6 +17,7 @@ GitHub Actions is a service launched by Microsoft that provides a virtual server
     - [5.2 Scheduled Compilation](#52-scheduled-compilation)
     - [5.3 Customizing Default System Configuration](#53-customizing-default-system-configuration)
     - [5.4 Expanding Github Actions Compilation Space Using Logical Volumes](#54-expanding-github-actions-compilation-space-using-logical-volumes)
+    - [5.5 Build Armbian Docker image](#55-build-armbian-docker-image)
   - [6. Saving the System](#6-saving-the-system)
   - [7. Downloading the System](#7-downloading-the-system)
   - [8. Installing Armbian to EMMC](#8-installing-armbian-to-emmc)
@@ -114,7 +115,7 @@ Now you can Fork the repository. Open the repository https://github.com/ophub/am
 
 ## 4. Customization instructions for personalized Armbian system files
 
-The system compilation process is controlled in the [.github/workflows/build-armbian.yml](../.github/workflows/build-armbian.yml) file. There are other .yml files in the workflows directory that implement different functions. The system is compiled in real time using Armbian's current official code, and related parameters can be referred to the official documentation.
+The system compilation process is controlled in the [.github/workflows/build-armbian-server-image.yml](../.github/workflows/build-armbian-server-image.yml) file. There are other .yml files in the workflows directory that implement different functions. The system is compiled in real time using Armbian's current official code, and related parameters can be referred to the official documentation.
 
 ```yaml
 - name: Compile Armbian [ ${{ inputs.set_release }} ]
@@ -145,7 +146,7 @@ In your repository's navigation bar, click the Actions button, then sequentially
 
 ### 5.2 Scheduled Compilation
 
-In the [.github/workflows/build-armbian.yml](../../.github/workflows/build-armbian.yml) file, use Cron to set scheduled compilation. The five different positions respectively represent minutes (0 - 59) / hours (0 - 23) / date (1 - 31) / month (1 - 12) / day of the week (0 - 6)(Sunday - Saturday). Set the time by modifying the value at different positions. The system uses UTC standard time by default, please convert according to the time zone of your country.
+In the [.github/workflows/build-armbian-server-image.yml](../../.github/workflows/build-armbian-server-image.yml) file, use Cron to set scheduled compilation. The five different positions respectively represent minutes (0 - 59) / hours (0 - 23) / date (1 - 31) / month (1 - 12) / day of the week (0 - 6)(Sunday - Saturday). Set the time by modifying the value at different positions. The system uses UTC standard time by default, please convert according to the time zone of your country.
 
 ```yaml
 schedule:
@@ -162,7 +163,7 @@ When compiling locally, specify with the `-b` parameter. When compiling in Actio
 
 ### 5.4 Expanding Github Actions Compilation Space Using Logical Volumes
 
-The default compile space for Github Actions is 84G, with about 50G available after considering the system and necessary software packages. When compiling all firmware, you may encounter an issue with insufficient space, which can be addressed by using logical volumes to expand the compile space to approximately 110G. Refer to the method in the [.github/workflows/build-armbian.yml](../.github/workflows/build-armbian.yml) file, and use the commands below to create a logical volume. Then, use the path of the logical volume during the compilation process.
+The default compile space for Github Actions is 84G, with about 50G available after considering the system and necessary software packages. When compiling all firmware, you may encounter an issue with insufficient space, which can be addressed by using logical volumes to expand the compile space to approximately 110G. Refer to the method in the [.github/workflows/build-armbian-server-image.yml](../.github/workflows/build-armbian-server-image.yml) file, and use the commands below to create a logical volume. Then, use the path of the logical volume during the compilation process.
 
 ```yaml
 - name: Create simulated physical disk
@@ -184,9 +185,13 @@ The default compile space for Github Actions is 84G, with about 50G available af
     df -Th
 ```
 
+### 5.5 Build Armbian Docker image
+
+The method for creating the [Docker](https://hub.docker.com/u/ophub) image of the Armbian system can refer to the [armbian_docker](../compile-kernel/tools/script/docker) build script.
+
 ## 6. Saving the System
 
-The system save setting is also controlled in the [.github/workflows/build-armbian.yml](../../.github/workflows/build-armbian.yml) file. We upload the compiled system to the Releases provided by the official GitHub via script automatically.
+The system save setting is also controlled in the [.github/workflows/build-armbian-server-image.yml](../../.github/workflows/build-armbian-server-image.yml) file. We upload the compiled system to the Releases provided by the official GitHub via script automatically.
 
 ```yaml
 - name: Upload Armbian image to Release
@@ -437,7 +442,7 @@ cd rtl8189ES_linux
 gun_file="arm-gnu-toolchain-13.3.rel1-aarch64-aarch64-none-elf.tar.xz"
 toolchain_path="/usr/local/toolchain"
 toolchain_name="gcc"
-export CROSS_COMPILE="${toolchain_path}/${gun_file//.tar.xz/}/bin/aarch64-none-elf-"
+export CROSS_COMPILE="${toolchain_path}/${gun_file//.tar.xz/}/bin/aarch64-none-linux-gnu-"
 export CC="${CROSS_COMPILE}gcc"
 export LD="${CROSS_COMPILE}ld.bfd"
 export ARCH="arm64"
@@ -1414,7 +1419,7 @@ During the Armbian image construction, these u-boot files will be written into t
 
 #### 12.15.4 Add Process Control Files
 
-Add the corresponding `BOARD` option to `armbian_board` in the [yml workflow control file](../../.github/workflows/build-armbian.yml), which supports use in `Actions` on github.com.
+Add the corresponding `BOARD` option to `armbian_board` in the [yml workflow control file](../../.github/workflows/build-armbian-server-image.yml), which supports use in `Actions` on github.com.
 
 ### 12.16 How to Resolve the Issue of I/O Errors While Writing to eMMC
 

@@ -66,6 +66,7 @@ ophub_release_file="/etc/ophub-release"
 repo_owner="unifreq"
 repo_branch="main"
 build_kernel=("6.1.y" "6.12.y")
+all_kernel=("5.4.y" "5.10.y" "5.15.y" "6.1.y" "6.6.y" "6.12.y")
 # Set whether to use the latest kernel, options: [ true / false ]
 auto_kernel="true"
 # Set whether to apply custom kernel patches, options: [ true / false ]
@@ -76,14 +77,18 @@ custom_name="-ophub"
 package_list="all"
 # Set the compression format, options: [ gzip / lzma / xz / zstd ]
 compress_format="xz"
+# Set whether to automatically delete the source code after the kernel is compiled
+delete_source="false"
+# Set make log silent output (recommended to use 'true' when github runner has insufficient space)
+silent_log="false"
 
 # Compile toolchain download mirror, run on Armbian
 dev_repo="https://github.com/ophub/kernel/releases/download/dev"
 # Arm GNU Toolchain source: https://developer.arm.com/downloads/-/arm-gnu-toolchain-downloads
-gun_file="arm-gnu-toolchain-14.2.rel1-aarch64-aarch64-none-elf.tar.xz"
+gun_file="arm-gnu-toolchain-14.2.rel1-aarch64-aarch64-none-linux-gnu.tar.xz"
 # Set the toolchain path
 toolchain_path="/usr/local/toolchain"
-# Set the default cross-compilation toolchain: [ clang / gcc / gcc-13.2, etc. ]
+# Set the default cross-compilation toolchain: [ clang / gcc / gcc-14.2, etc. ]
 toolchain_name="gcc"
 
 # Set font color
@@ -104,25 +109,32 @@ init_var() {
     echo -e "${STEPS} Start Initializing Variables..."
 
     # If it is followed by [ : ], it means that the option requires a parameter value
-    get_all_ver="$(getopt "k:a:n:m:p:r:t:c:" "${@}")"
+    local options="k:a:n:m:p:r:t:c:d:s:"
+    parsed_args=$(getopt -o "${options}" -- "${@}")
+    [[ ${?} -ne 0 ]] && error_msg "Parameter parsing failed."
+    eval set -- "${parsed_args}"
 
-    while [[ -n "${1}" ]]; do
+    while true; do
         case "${1}" in
-        -k | --kernel)
+        -k | --Kernel)
             if [[ -n "${2}" ]]; then
-                oldIFS="${IFS}"
-                IFS="_"
-                build_kernel=(${2})
-                IFS="${oldIFS}"
-                shift
+                if [[ "${2}" == "all" ]]; then
+                    build_kernel=(${all_kernel[@]})
+                else
+                    oldIFS="${IFS}"
+                    IFS="_"
+                    build_kernel=(${2})
+                    IFS="${oldIFS}"
+                fi
+                shift 2
             else
                 error_msg "Invalid -k parameter [ ${2} ]!"
             fi
             ;;
-        -a | --autoKernel)
+        -a | --AutoKernel)
             if [[ -n "${2}" ]]; then
                 auto_kernel="${2}"
-                shift
+                shift 2
             else
                 error_msg "Invalid -a parameter [ ${2} ]!"
             fi
@@ -131,7 +143,7 @@ init_var() {
             if [[ -n "${2}" ]]; then
                 custom_name="${2// /}"
                 [[ "${custom_name:0:1}" != "-" ]] && custom_name="-${custom_name}"
-                shift
+                shift 2
             else
                 error_msg "Invalid -n parameter [ ${2} ]!"
             fi
@@ -139,7 +151,7 @@ init_var() {
         -m | --MakePackage)
             if [[ -n "${2}" ]]; then
                 package_list="${2}"
-                shift
+                shift 2
             else
                 error_msg "Invalid -m parameter [ ${2} ]!"
             fi
@@ -147,15 +159,15 @@ init_var() {
         -p | --AutoPatch)
             if [[ -n "${2}" ]]; then
                 auto_patch="${2}"
-                shift
+                shift 2
             else
                 error_msg "Invalid -p parameter [ ${2} ]!"
             fi
             ;;
-        -r | --repo)
+        -r | --Repository)
             if [[ -n "${2}" ]]; then
                 repo_owner="${2}"
-                shift
+                shift 2
             else
                 error_msg "Invalid -r parameter [ ${2} ]!"
             fi
@@ -163,7 +175,7 @@ init_var() {
         -t | --Toolchain)
             if [[ -n "${2}" ]]; then
                 toolchain_name="${2}"
-                shift
+                shift 2
             else
                 error_msg "Invalid -t parameter [ ${2} ]!"
             fi
@@ -171,16 +183,36 @@ init_var() {
         -c | --Compress)
             if [[ -n "${2}" ]]; then
                 compress_format="${2}"
-                shift
+                shift 2
             else
                 error_msg "Invalid -c parameter [ ${2} ]!"
             fi
             ;;
+        -d | --DeleteSource)
+            if [[ -n "${2}" ]]; then
+                delete_source="${2}"
+                shift 2
+            else
+                error_msg "Invalid -d parameter [ ${2} ]!"
+            fi
+            ;;
+        -s | --SilentLog)
+            if [[ -n "${2}" ]]; then
+                silent_log="${2}"
+                shift 2
+            else
+                error_msg "Invalid -s parameter [ ${2} ]!"
+            fi
+            ;;
+        --)
+            shift
+            break
+            ;;
         *)
-            error_msg "Invalid option [ ${1} ]!"
+            [[ -n "${1}" ]] && error_msg "Invalid option [ ${1} ]!"
+            break
             ;;
         esac
-        shift
     done
 
     # Receive the value entered by the [ -r ] parameter
@@ -195,27 +227,16 @@ init_var() {
     # Set the gcc version code
     [[ "${toolchain_name}" =~ ^gcc-[0-9]+.[0-9]+ ]] && {
         gcc_version_code="${toolchain_name#*-}"
-        gun_file="arm-gnu-toolchain-${gcc_version_code}.rel1-aarch64-aarch64-none-elf.tar.xz"
+        gun_file="arm-gnu-toolchain-${gcc_version_code}.rel1-aarch64-aarch64-none-linux-gnu.tar.xz"
     }
 
     # Set compilation parameters
     export SRC_ARCH="arm64"
     export LOCALVERSION="${custom_name}"
 
-    # Check release file
-    [[ -f "${ophub_release_file}" ]] || error_msg "missing [ ${ophub_release_file} ] file."
-
-    # Get values
-    source "${ophub_release_file}"
-    PLATFORM="${PLATFORM}"
-    FDTFILE="${FDTFILE}"
-
-    # Early devices did not add platform parameters, auto-completion
-    [[ -z "${PLATFORM}" && -n "${FDTFILE}" ]] && {
-        [[ ${FDTFILE:0:5} == "meson" ]] && PLATFORM="amlogic" || PLATFORM="rockchip"
-        echo "PLATFORM='${PLATFORM}'" >>${ophub_release_file}
-    }
-    echo -e "${INFO} Armbian PLATFORM: [ ${PLATFORM} ]"
+    # Get Armbian PLATFORM value
+    PLATFORM="$(cat ${ophub_release_file} 2>/dev/null | grep -E "^PLATFORM=.*" | cut -d"'" -f2)"
+    [[ -n "${PLATFORM}" ]] && echo -e "${INFO} Armbian PLATFORM: [ ${PLATFORM} ]"
 }
 
 toolchain_check() {
@@ -275,7 +296,7 @@ toolchain_check() {
         export PATH="${path_gcc}"
 
         # Set cross compilation parameters
-        export CROSS_COMPILE="${toolchain_path}/${gun_file//.tar.xz/}/bin/aarch64-none-elf-"
+        export CROSS_COMPILE="${toolchain_path}/${gun_file//.tar.xz/}/bin/aarch64-none-linux-gnu-"
         export CC="${CROSS_COMPILE}gcc"
         export LD="${CROSS_COMPILE}ld.bfd"
         export MFLAGS=""
@@ -291,7 +312,7 @@ query_version() {
 
     # Query the latest kernel in a loop
     i=1
-    for KERNEL_VAR in ${build_kernel[*]}; do
+    for KERNEL_VAR in ${build_kernel[@]}; do
         echo -e "${INFO} (${i}) Auto query the latest kernel version of the same series for [ ${KERNEL_VAR} ]"
         # Identify the kernel mainline
         MAIN_LINE="$(echo ${KERNEL_VAR} | awk -F '.' '{print $1"."$2}')"
@@ -313,7 +334,7 @@ query_version() {
 
     # Reset the kernel array to the latest kernel version
     unset build_kernel
-    build_kernel="${tmp_arr_kernels[*]}"
+    build_kernel="${tmp_arr_kernels[@]}"
 }
 
 apply_patch() {
@@ -323,6 +344,7 @@ apply_patch() {
     # Apply the common kernel patches
     if [[ -d "${kernel_patch_path}/common-kernel-patches" ]]; then
         echo -e "${INFO} Copy common kernel patches..."
+        rm -f ${kernel_path}/${local_kernel_path}/*.patch
         cp -vf ${kernel_patch_path}/common-kernel-patches/*.patch -t ${kernel_path}/${local_kernel_path}
 
         cd ${kernel_path}/${local_kernel_path}
@@ -338,6 +360,7 @@ apply_patch() {
     # Apply the dedicated kernel patches
     if [[ -d "${kernel_patch_path}/${local_kernel_path}" ]]; then
         echo -e "${INFO} Copy [ ${local_kernel_path} ] version dedicated kernel patches..."
+        rm -f ${kernel_path}/${local_kernel_path}/*.patch
         cp -vf ${kernel_patch_path}/${local_kernel_path}/*.patch -t ${kernel_path}/${local_kernel_path}
 
         cd ${kernel_path}/${local_kernel_path}
@@ -500,15 +523,18 @@ compile_dtbs() {
 compile_kernel() {
     cd ${kernel_path}/${local_kernel_path}
 
+    # Set the make log silent output
+    [[ "${silent_log}" == "true" || "${silent_log}" == "yes" ]] && silent_print="-s" || silent_print=""
+
     # Make kernel
     echo -e "${STEPS} Start compilation kernel [ ${local_kernel_path} ]..."
-    make ${MAKE_SET_STRING} Image modules dtbs -j${PROCESS}
+    make ${silent_print} ${MAKE_SET_STRING} Image modules dtbs -j${PROCESS}
     #make ${MAKE_SET_STRING} bindeb-pkg KDEB_COMPRESS=xz KBUILD_DEBARCH=arm64 -j${PROCESS}
     [[ "${?}" -eq "0" ]] && echo -e "${SUCCESS} The kernel is compiled successfully."
 
     # Install modules
     echo -e "${STEPS} Install modules ..."
-    make ${MAKE_SET_STRING} INSTALL_MOD_PATH=${output_path}/modules modules_install
+    make ${silent_print} ${MAKE_SET_STRING} INSTALL_MOD_PATH=${output_path}/modules modules_install
     [[ "${?}" -eq "0" ]] && echo -e "${SUCCESS} The modules is installed successfully."
 
     # Strip debug information
@@ -529,12 +555,13 @@ generate_uinitrd() {
     # Backup current system files for /boot
     echo -e "${INFO} Backup the files in the [ ${boot_backup_path} ] directory."
     rm -rf ${boot_backup_path} && mkdir -p ${boot_backup_path}
-    mv -f /boot/{config-*,initrd.img-*,System.map-*,vmlinuz-*,uInitrd*,*Image} -t ${boot_backup_path}
+    mv -f /boot/{config-*,initrd.img-*,System.map-*,vmlinuz-*,uInitrd*,*Image} -t ${boot_backup_path} 2>/dev/null
     # Copy /boot related files into armbian system
+    [[ -d "/boot" ]] || mkdir -p /boot
     cp -f ${kernel_path}/${local_kernel_path}/System.map /boot/System.map-${kernel_outname}
     cp -f ${kernel_path}/${local_kernel_path}/.config /boot/config-${kernel_outname}
     cp -f ${kernel_path}/${local_kernel_path}/arch/${SRC_ARCH}/boot/Image /boot/vmlinuz-${kernel_outname}
-    if [[ "${PLATFORM}" == "rockchip" || "${PLATFORM}" == "allwinner" ]]; then
+    if [[ -z "${PLATFORM}" || "${PLATFORM}" =~ ^(rockchip|allwinner)$ ]]; then
         cp -f /boot/vmlinuz-${kernel_outname} /boot/Image
     else
         cp -f /boot/vmlinuz-${kernel_outname} /boot/zImage
@@ -544,8 +571,9 @@ generate_uinitrd() {
     # Backup current system files for /usr/lib/modules
     echo -e "${INFO} Backup the files in the [ ${modules_backup_path} ] directory."
     rm -rf ${modules_backup_path} && mkdir -p ${modules_backup_path}
-    mv -f /usr/lib/modules/$(uname -r) -t ${modules_backup_path}
+    mv -f /usr/lib/modules/$(uname -r) -t ${modules_backup_path} 2>/dev/null
     # Copy modules files
+    [[ -d "/usr/lib/modules" ]] || mkdir -p /usr/lib/modules
     cp -rf ${output_path}/modules/lib/modules/${kernel_outname} -t /usr/lib/modules
     #echo -e "${INFO} Kernel copy results in the [ /usr/lib/modules ] directory: \n$(ls -l /usr/lib/modules) \n"
 
@@ -584,11 +612,11 @@ generate_uinitrd() {
 
     # Restore the files in the [ /boot ] directory
     mv -f *${kernel_outname} ${output_path}/boot
-    mv -f ${boot_backup_path}/* -t .
+    mv -f ${boot_backup_path}/* -t . 2>/dev/null
 
     # Restore the files in the [ /usr/lib/modules ] directory
     rm -rf /usr/lib/modules/${kernel_outname}
-    mv -f ${modules_backup_path}/* -t /usr/lib/modules
+    mv -f ${modules_backup_path}/* -t /usr/lib/modules 2>/dev/null
 
     # Remove temporary backup directory
     sync && sleep 3
@@ -679,6 +707,7 @@ compile_selection() {
     tar -czf ${kernel_version}.tar.gz ${kernel_version}
 
     echo -e "${INFO} Kernel series files are stored in [ ${output_path} ]."
+    echo -e "${INFO} Current space usage: \n$(df -hT ${output_path}) \n"
 }
 
 clean_tmp() {
@@ -687,6 +716,7 @@ clean_tmp() {
 
     sync && sleep 3
     rm -rf ${output_path}/{boot/,dtb/,modules/,header/,${kernel_version}/}
+    [[ "${delete_source}" == "true" ]] && rm -rf ${kernel_path}/* 2>/dev/null
     rm -rf ${tmp_backup_path}
 
     echo -e "${SUCCESS} All processes have been completed."
@@ -696,7 +726,7 @@ loop_recompile() {
     cd ${current_path}
 
     j="1"
-    for k in ${build_kernel[*]}; do
+    for k in ${build_kernel[@]}; do
         # kernel_version, such as [ 6.1.15 ]
         kernel_version="${k}"
         # kernel <VERSION> and <PATCHLEVEL>, such as [ 6.1 ]
@@ -712,6 +742,9 @@ loop_recompile() {
             server_kernel_repo="${code_owner}/${code_repo}"
             local_kernel_path="${code_repo}-${code_branch}"
         fi
+
+        # Show server start information
+        echo -e "${INFO} Server space usage before starting to compile: \n$(df -hT ${kernel_path}) \n"
 
         # Check disk space size
         echo -ne "(${j}) Start compiling the kernel [\033[92m ${kernel_version} \033[0m]. "
@@ -756,10 +789,9 @@ echo -e "${INFO} Kernel Package: [ ${package_list} ]"
 echo -e "${INFO} kernel signature: [ ${custom_name} ]"
 echo -e "${INFO} Latest kernel version: [ ${auto_kernel} ]"
 echo -e "${INFO} kernel initrd compress: [ ${compress_format} ]"
-echo -e "${INFO} Kernel List: [ $(echo ${build_kernel[*]} | xargs) ] \n"
-
-# Show server start information
-echo -e "${INFO} Server space usage before starting to compile: \n$(df -hT ${kernel_path}) \n"
+echo -e "${INFO} Delete source: [ ${delete_source} ]"
+echo -e "${INFO} Silent log: [ ${silent_log} ]"
+echo -e "${INFO} Kernel List: [ $(echo ${build_kernel[@]} | xargs) ] \n"
 
 # Loop to compile the kernel
 loop_recompile

@@ -28,6 +28,7 @@
 # get_kernel_source  : Get the kernel source code
 #
 # chroot_armbian     : Chroot into Armbian to generate initrd.img, uInitrd and make scripts
+# unmount_armbian    : Helper function that unmounts the armbian system
 # compile_env        : Set up the compile kernel environment
 # compile_dtbs       : Compile the dtbs
 # compile_kernel     : Compile the kernel
@@ -48,7 +49,6 @@ config_path="${compile_path}/tools/config"
 script_path="${compile_path}/tools/script"
 kernel_patch_path="${compile_path}/tools/patch"
 armbian_path="${compile_path}/tools/armbian"
-armbian_file="${armbian_path}/armbian.img"
 output_path="${compile_path}/output"
 chroot_path="${output_path}/chroot"
 chroot_file="${chroot_path}/chroot_armbian.img"
@@ -63,6 +63,7 @@ host_release="$(cat /etc/os-release | grep '^VERSION_CODENAME=.*' | cut -d'=' -f
 repo_owner="unifreq"
 repo_branch="main"
 build_kernel=("6.1.y" "6.12.y")
+all_kernel=("5.4.y" "5.10.y" "5.15.y" "6.1.y" "6.6.y" "6.12.y")
 # Set whether to use the latest kernel, options: [ true / false ]
 auto_kernel="true"
 # Set whether to apply custom kernel patches, options: [ true / false ]
@@ -73,17 +74,21 @@ custom_name="-ophub"
 package_list="all"
 # Set the compression format, options: [ gzip / lzma / xz / zstd ]
 compress_format="xz"
+# Set whether to automatically delete the source code after the kernel is compiled
+delete_source="false"
+# Set make log silent output (recommended to use 'true' when github runner has insufficient space)
+silent_log="false"
 
 # Cross compile toolchain download mirror
 dev_repo="https://github.com/ophub/kernel/releases/download/dev"
 # Arm GNU Toolchain source: https://developer.arm.com/downloads/-/arm-gnu-toolchain-downloads
 gun_file_x86_64="arm-gnu-toolchain-14.2.rel1-x86_64-aarch64-none-linux-gnu.tar.xz"
-gun_file_aarch64="arm-gnu-toolchain-14.2.rel1-aarch64-aarch64-none-elf.tar.xz"
+gun_file_aarch64="arm-gnu-toolchain-14.2.rel1-aarch64-aarch64-none-linux-gnu.tar.xz"
 # Armenian file source: https://github.com/ophub/amlogic-s9xxx-armbian/releases
 armbian_rootfs_file="armbian.tar.xz"
 # Set the toolchain path
 toolchain_path="/usr/local/toolchain"
-# Set the default cross-compilation toolchain: [ clang / gcc / gcc-13.2, etc. ]
+# Set the default cross-compilation toolchain: [ clang / gcc / gcc-14.2, etc. ]
 toolchain_name="gcc"
 
 # QEMU BINARY
@@ -130,17 +135,24 @@ init_var() {
     echo -e "${STEPS} Start Initializing Variables..."
 
     # If it is followed by [ : ], it means that the option requires a parameter value
-    get_all_ver="$(getopt "k:a:n:m:p:r:t:c:" "${@}")"
+    local options="k:a:n:m:p:r:t:c:d:s:"
+    parsed_args=$(getopt -o "${options}" -- "${@}")
+    [[ ${?} -ne 0 ]] && error_msg "Parameter parsing failed."
+    eval set -- "${parsed_args}"
 
-    while [[ -n "${1}" ]]; do
+    while true; do
         case "${1}" in
         -k | --Kernel)
             if [[ -n "${2}" ]]; then
-                oldIFS="${IFS}"
-                IFS="_"
-                build_kernel=(${2})
-                IFS="${oldIFS}"
-                shift
+                if [[ "${2}" == "all" ]]; then
+                    build_kernel=(${all_kernel[@]})
+                else
+                    oldIFS="${IFS}"
+                    IFS="_"
+                    build_kernel=(${2})
+                    IFS="${oldIFS}"
+                fi
+                shift 2
             else
                 error_msg "Invalid -k parameter [ ${2} ]!"
             fi
@@ -148,7 +160,7 @@ init_var() {
         -a | --AutoKernel)
             if [[ -n "${2}" ]]; then
                 auto_kernel="${2}"
-                shift
+                shift 2
             else
                 error_msg "Invalid -a parameter [ ${2} ]!"
             fi
@@ -157,7 +169,7 @@ init_var() {
             if [[ -n "${2}" ]]; then
                 custom_name="${2// /}"
                 [[ "${custom_name:0:1}" != "-" ]] && custom_name="-${custom_name}"
-                shift
+                shift 2
             else
                 error_msg "Invalid -n parameter [ ${2} ]!"
             fi
@@ -165,7 +177,7 @@ init_var() {
         -m | --MakePackage)
             if [[ -n "${2}" ]]; then
                 package_list="${2}"
-                shift
+                shift 2
             else
                 error_msg "Invalid -m parameter [ ${2} ]!"
             fi
@@ -173,7 +185,7 @@ init_var() {
         -p | --AutoPatch)
             if [[ -n "${2}" ]]; then
                 auto_patch="${2}"
-                shift
+                shift 2
             else
                 error_msg "Invalid -p parameter [ ${2} ]!"
             fi
@@ -181,7 +193,7 @@ init_var() {
         -r | --Repository)
             if [[ -n "${2}" ]]; then
                 repo_owner="${2}"
-                shift
+                shift 2
             else
                 error_msg "Invalid -r parameter [ ${2} ]!"
             fi
@@ -189,7 +201,7 @@ init_var() {
         -t | --Toolchain)
             if [[ -n "${2}" ]]; then
                 toolchain_name="${2}"
-                shift
+                shift 2
             else
                 error_msg "Invalid -t parameter [ ${2} ]!"
             fi
@@ -197,16 +209,36 @@ init_var() {
         -c | --Compress)
             if [[ -n "${2}" ]]; then
                 compress_format="${2}"
-                shift
+                shift 2
             else
                 error_msg "Invalid -c parameter [ ${2} ]!"
             fi
             ;;
+        -d | --DeleteSource)
+            if [[ -n "${2}" ]]; then
+                delete_source="${2}"
+                shift 2
+            else
+                error_msg "Invalid -d parameter [ ${2} ]!"
+            fi
+            ;;
+        -s | --SilentLog)
+            if [[ -n "${2}" ]]; then
+                silent_log="${2}"
+                shift 2
+            else
+                error_msg "Invalid -s parameter [ ${2} ]!"
+            fi
+            ;;
+        --)
+            shift
+            break
+            ;;
         *)
-            error_msg "Invalid option [ ${1} ]!"
+            [[ -n "${1}" ]] && error_msg "Invalid option [ ${1} ]!"
+            break
             ;;
         esac
-        shift
     done
 
     # Receive the value entered by the [ -r ] parameter
@@ -222,7 +254,7 @@ init_var() {
     [[ "${toolchain_name}" =~ ^gcc-[0-9]+.[0-9]+ ]] && {
         gcc_version_code="${toolchain_name#*-}"
         gun_file_x86_64="arm-gnu-toolchain-${gcc_version_code}.rel1-x86_64-aarch64-none-linux-gnu.tar.xz"
-        gun_file_aarch64="arm-gnu-toolchain-${gcc_version_code}.rel1-aarch64-aarch64-none-elf.tar.xz"
+        gun_file_aarch64="arm-gnu-toolchain-${gcc_version_code}.rel1-aarch64-aarch64-none-linux-gnu.tar.xz"
     }
 
     # Set cross compilation parameters
@@ -238,12 +270,13 @@ toolchain_check() {
     apt-get -qq update
     if [[ "${arch_info}" == "x86_64" ]]; then
         apt-get -qq install -y $(cat compile-kernel/tools/script/ubuntu2204-build-armbian-depends)
+        systemctl restart systemd-binfmt
     else
         apt-get -qq install -y $(cat compile-kernel/tools/script/armbian-compile-kernel-depends)
     fi
 
     # Download armbian
-    if [[ ! -f "${armbian_file}" ]]; then
+    if [[ ! -s "${armbian_path}/${armbian_rootfs_file}" ]]; then
         echo -e "${INFO} Start downloading Armbian rootfs file [ ${armbian_rootfs_file} ]..."
         rm -rf ${armbian_path} && mkdir -p ${armbian_path}
 
@@ -252,17 +285,7 @@ toolchain_check() {
             curl -fsSL "${dev_repo}/${armbian_rootfs_file}" -o "${armbian_path}/${armbian_rootfs_file}"
             [[ "${?}" -eq "0" ]] && break || sleep 60
         done
-        [[ "${?}" -eq "0" ]] || error_msg "Armbian file download failed"
-
-        # Decompress the Armbian rootfs file
-        tar -xJf ${armbian_path}/${armbian_rootfs_file} -C ${armbian_path}
-
-        # Change other names to armbian.img
-        [[ -f "${armbian_file}" ]] || mv -f ${armbian_path}/*.img ${armbian_file}
-
-        # Delete download file
-        rm -f ${armbian_path}/${armbian_rootfs_file}
-        [[ -f "${armbian_file}" ]] || error_msg "There is no Armbian rootfs file: [ ${armbian_file} ]"
+        [[ -s "${armbian_path}/${armbian_rootfs_file}" ]] || error_msg "Armbian file download failed"
     fi
 
     # Set the default path
@@ -290,7 +313,7 @@ toolchain_check() {
             gun_bin="aarch64-none-linux-gnu-"
         else
             gun_file="${gun_file_aarch64}"
-            gun_bin="aarch64-none-elf-"
+            gun_bin="aarch64-none-linux-gnu-"
         fi
 
         # Download Arm GNU Toolchain
@@ -370,6 +393,7 @@ apply_patch() {
     # Apply the common kernel patches
     if [[ -d "${kernel_patch_path}/common-kernel-patches" ]]; then
         echo -e "${INFO} Copy common kernel patches..."
+        rm -f ${kernel_path}/${local_kernel_path}/*.patch
         cp -vf ${kernel_patch_path}/common-kernel-patches/*.patch -t ${kernel_path}/${local_kernel_path}
 
         cd ${kernel_path}/${local_kernel_path}
@@ -385,6 +409,7 @@ apply_patch() {
     # Apply the dedicated kernel patches
     if [[ -d "${kernel_patch_path}/${local_kernel_path}" ]]; then
         echo -e "${INFO} Copy [ ${local_kernel_path} ] version dedicated kernel patches..."
+        rm -f ${kernel_path}/${local_kernel_path}/*.patch
         cp -vf ${kernel_patch_path}/${local_kernel_path}/*.patch -t ${kernel_path}/${local_kernel_path}
 
         cd ${kernel_path}/${local_kernel_path}
@@ -442,12 +467,31 @@ get_kernel_source() {
     [[ "${auto_patch}" == "true" || "${auto_patch}" == "yes" ]] && apply_patch
 }
 
+unmount_armbian() {
+    echo -e "${STEPS} Unmounting Armbian chroot"
+    tag_rootfs="${chroot_path}/root"
+    cd ${current_path}
+
+    sync && sleep 3
+    umount ${tag_rootfs}/dev/pts 2>/dev/null
+    umount -R ${tag_rootfs}/dev 2>/dev/null
+    umount ${tag_rootfs}/run 2>/dev/null
+    umount ${tag_rootfs}/sys 2>/dev/null
+    umount ${tag_rootfs}/proc 2>/dev/null
+    umount ${tag_rootfs}/boot 2>/dev/null
+    umount ${tag_rootfs} 2>/dev/null
+    losetup -D 2>/dev/null
+}
+
 chroot_armbian() {
     cd ${current_path}
     echo -e "${STEPS} Create chroot..."
+    echo -e "${INFO} Current space usage: \n$(df -hT ${chroot_path}) \n"
 
+    # Extract the armbian rootfs file
     rm -f ${chroot_file}
-    cp -f ${armbian_file} ${chroot_file}
+    tar -xJf ${armbian_path}/${armbian_rootfs_file} -O >"${chroot_file}"
+    [[ "${?}" -eq "0" && -s "${chroot_file}" ]] || error_msg "Armbian rootfs file extraction failed."
 
     # Mount the armbian system
     tag_rootfs="${chroot_path}/root"
@@ -458,17 +502,19 @@ chroot_armbian() {
     mount_try ${loop_armbian}p2 ${tag_rootfs}
     mount_try ${loop_armbian}p1 ${tag_rootfs}/boot
 
+    # Get Armbian PLATFORM value
     ARMBIAN_PLATFORM="$(cat ${tag_rootfs}/etc/ophub-release 2>/dev/null | grep -E "^PLATFORM=.*" | cut -d"'" -f2)"
-    echo -e "${INFO} Armbian PLATFORM: [ ${ARMBIAN_PLATFORM} ]"
+    [[ -n "${ARMBIAN_PLATFORM}" ]] && echo -e "${INFO} Armbian PLATFORM: [ ${ARMBIAN_PLATFORM} ]"
 
     echo -e "${INFO} Copy the kernel files to the armbian system..."
     # Remove current system files for /boot
     rm -f ${tag_rootfs}/boot/{config-*,initrd.img-*,System.map-*,vmlinuz-*,uInitrd*,*Image}
     # Copy /boot related files into armbian system
+    [[ -d "${tag_rootfs}/boot" ]] || mkdir -p ${tag_rootfs}/boot
     cp -f ${kernel_path}/${local_kernel_path}/System.map ${tag_rootfs}/boot/System.map-${kernel_outname}
     cp -f ${kernel_path}/${local_kernel_path}/.config ${tag_rootfs}/boot/config-${kernel_outname}
     cp -f ${kernel_path}/${local_kernel_path}/arch/${SRC_ARCH}/boot/Image ${tag_rootfs}/boot/vmlinuz-${kernel_outname}
-    if [[ "${ARMBIAN_PLATFORM}" == "rockchip" || "${ARMBIAN_PLATFORM}" == "allwinner" ]]; then
+    if [[ -z "${ARMBIAN_PLATFORM}" || "${ARMBIAN_PLATFORM}" =~ ^(rockchip|allwinner)$ ]]; then
         cp -f ${tag_rootfs}/boot/vmlinuz-${kernel_outname} ${tag_rootfs}/boot/Image
     else
         cp -f ${tag_rootfs}/boot/vmlinuz-${kernel_outname} ${tag_rootfs}/boot/zImage
@@ -478,6 +524,7 @@ chroot_armbian() {
     # Remove current system files for /usr/lib/modules
     rm -rf ${tag_rootfs}/usr/lib/modules/*
     # Copy /usr/lib/modules related files into armbian system
+    [[ -d "${tag_rootfs}/usr/lib/modules" ]] && mkdir -p ${tag_rootfs}/usr/lib/modules
     cp -rf ${output_path}/modules/lib/modules/${kernel_outname} -t ${tag_rootfs}/usr/lib/modules
     #echo -e "${INFO} Kernel copy results in the [ ${tag_rootfs}/usr/lib/modules ] directory: \n$(ls -l ${tag_rootfs}/usr/lib/modules) \n"
 
@@ -509,26 +556,42 @@ chroot_armbian() {
         error_msg "The [ ${compress_initrd_file} ] file does not exist."
     fi
 
-    echo -e "${INFO} Copy the [ ${qemu_binary_arm64} ] file to the armbian system..."
-    [[ -f "/usr/bin/${qemu_binary_arm64}" ]] && cp -f /usr/bin/${qemu_binary_arm64} ${tag_rootfs}/usr/bin/
-    #echo -e "${INFO} The [ ${qemu_binary_arm64} ] file copy results: \n$(ls -l ${tag_rootfs}/usr/bin/${qemu_binary_arm64}) \n"
+    if [[ "${arch_info}" == "x86_64" ]]; then
+        echo -e "${INFO} Copy the [ ${qemu_binary_arm64} ] file to the armbian system..."
+        [[ -f "/usr/bin/${qemu_binary_arm64}" ]] && cp -f /usr/bin/${qemu_binary_arm64} ${tag_rootfs}/usr/bin/
+        #echo -e "${INFO} The [ ${qemu_binary_arm64} ] file copy results: \n$(ls -l ${tag_rootfs}/usr/bin/${qemu_binary_arm64}) \n"
+    fi
+
+    # Copy the /etc/resolv.conf file to the armbian system
+    [[ -f "/etc/resolv.conf" ]] && {
+        echo -e "${INFO} Copy the [ /etc/resolv.conf ] file to the armbian system..."
+        cp -f /etc/resolv.conf ${tag_rootfs}/etc/resolv.conf
+    }
 
     echo -e "${INFO} Copy the [ ubuntu_chroot_armbian.sh ] script to the armbian system..."
     cp -f ${script_path}/ubuntu_chroot_armbian.sh ${tag_rootfs}/root
     chmod +x ${tag_rootfs}/root/ubuntu_chroot_armbian.sh
-    sync && sleep 3
     #echo -e "${INFO} Kernel copy results in the [ ${tag_rootfs}/root ] directory: \n$(ls -l ${tag_rootfs}/root) \n"
 
     # Enter the armbian system to generate /boot/uInitrd-${kernel_outname} file
-    echo -e "${STEPS} Enter the chroot Armbian system..."
+    echo -e "${STEPS} Start mounting the armbian system..."
+    [[ -d "${tag_rootfs}/dev/pts" ]] || mkdir -p ${tag_rootfs}/dev/pts
     mount -t proc /proc ${tag_rootfs}/proc
+    mount -t sysfs /sys ${tag_rootfs}/sys
+    mount -t devpts /dev/pts ${tag_rootfs}/dev/pts
     mount --bind /dev ${tag_rootfs}/dev
-    mount --bind /dev/pts ${tag_rootfs}/dev/pts
-    mount --bind /proc/$$/fd ${tag_rootfs}/dev/fd
+    mount --bind /run ${tag_rootfs}/run
     chmod 0666 ${tag_rootfs}/dev/null
-    chroot ${tag_rootfs} /bin/bash -c "/root/ubuntu_chroot_armbian.sh ${kernel_outname}"
-    [[ "${?}" -eq "0" && -f "${tag_rootfs}/boot/uInitrd-${kernel_outname}" ]] || error_msg "Create chroot uInitrd-${kernel_outname} file failed."
+    sync && sleep 3
 
+    # Always unmount armbian on exit
+    trap unmount_armbian SIGINT
+    echo -e "${INFO} Entering the chroot environment, please wait..."
+    chroot ${tag_rootfs} /bin/bash -c "/root/ubuntu_chroot_armbian.sh ${kernel_outname}"
+    if [[ "${?}" -ne "0" || ! -f "${tag_rootfs}/boot/uInitrd-${kernel_outname}" ]]; then
+        unmount_armbian
+        error_msg "Create chroot uInitrd-${kernel_outname} file failed."
+    fi
     cd ${current_path}
 
     echo -e "${STEPS} Start copying files from Armbian system..."
@@ -541,15 +604,9 @@ chroot_armbian() {
     echo -e "${INFO} Copy the header files from armbian [ /opt/header ]"
     cp -f ${tag_rootfs}/opt/header/header-${kernel_outname}.tar.gz ${output_path}/${kernel_version}
 
+    trap - SIGINT
     # Unmount the armbian system
-    sync && sleep 3
-    umount ${tag_rootfs}/dev/fd 2>/dev/null
-    umount ${tag_rootfs}/dev/pts 2>/dev/null
-    umount ${tag_rootfs}/dev 2>/dev/null
-    umount ${tag_rootfs}/proc 2>/dev/null
-    umount ${tag_rootfs}/boot 2>/dev/null
-    umount ${tag_rootfs} 2>/dev/null
-    losetup -D 2>/dev/null
+    unmount_armbian
 }
 
 compile_env() {
@@ -623,14 +680,17 @@ compile_dtbs() {
 compile_kernel() {
     cd ${kernel_path}/${local_kernel_path}
 
+    # Set the make log silent output
+    [[ "${silent_log}" == "true" || "${silent_log}" == "yes" ]] && silent_print="-s" || silent_print=""
+
     # Make kernel
     echo -e "${STEPS} Start compilation kernel [ ${local_kernel_path} ]..."
-    make ${MAKE_SET_STRING} Image modules dtbs -j${PROCESS}
+    make ${silent_print} ${MAKE_SET_STRING} Image modules dtbs -j${PROCESS}
     [[ "${?}" -eq "0" ]] && echo -e "${SUCCESS} The kernel is compiled successfully."
 
     # Install modules
     echo -e "${STEPS} Install modules..."
-    make ${MAKE_SET_STRING} INSTALL_MOD_PATH=${output_path}/modules modules_install
+    make ${silent_print} ${MAKE_SET_STRING} INSTALL_MOD_PATH=${output_path}/modules modules_install
     [[ "${?}" -eq "0" ]] && echo -e "${SUCCESS} The modules is installed successfully."
 
     # Strip debug information
@@ -729,12 +789,11 @@ compile_selection() {
 
 clean_tmp() {
     cd ${current_path}
-    echo -e "${STEPS} Clear the space and update-grub..."
+    echo -e "${STEPS} Clear the space..."
 
     sync && sleep 3
     rm -rf ${output_path}/{chroot/,boot/,dtb/,modules/,header/,${kernel_version}/}
-
-    update-grub 2>/dev/null
+    [[ "${delete_source}" == "true" ]] && rm -rf ${kernel_path}/* 2>/dev/null
 
     echo -e "${SUCCESS} All processes have been completed."
 }
@@ -759,6 +818,9 @@ loop_recompile() {
             server_kernel_repo="${code_owner}/${code_repo}"
             local_kernel_path="${code_repo}-${code_branch}"
         fi
+
+        # Show server start information
+        echo -e "${INFO} Server space usage before starting to compile: \n$(df -hT ${kernel_path}) \n"
 
         # Check disk space size
         echo -ne "(${j}) Start compiling the kernel [\033[92m ${kernel_version} \033[0m]. "
@@ -787,6 +849,7 @@ echo -e "${INFO} Server running on Ubuntu: [ Release: ${host_release} / Host: ${
 [[ "$(id -u)" == "0" ]] || error_msg "Please run this script as root: [ sudo ./${0} ]"
 [[ "x86_64 aarch64" == *"${arch_info}"* ]] || error_msg "This script is only supported on the x86_64 and aarch64 platforms."
 
+echo -e "${INFO} Using the current system to compile the kernel."
 # Initialize variables
 init_var "${@}"
 # Check and install the toolchain
@@ -803,10 +866,9 @@ echo -e "${INFO} Kernel Package: [ ${package_list} ]"
 echo -e "${INFO} kernel signature: [ ${custom_name} ]"
 echo -e "${INFO} Latest kernel version: [ ${auto_kernel} ]"
 echo -e "${INFO} kernel initrd compress: [ ${compress_format} ]"
+echo -e "${INFO} Delete source: [ ${delete_source} ]"
+echo -e "${INFO} Silent log: [ ${silent_log} ]"
 echo -e "${INFO} Kernel List: [ $(echo ${build_kernel[@]} | xargs) ] \n"
-
-# Show server start information
-echo -e "${INFO} Server space usage before starting to compile: \n$(df -hT ${kernel_path}) \n"
 
 # Loop to compile the kernel
 loop_recompile

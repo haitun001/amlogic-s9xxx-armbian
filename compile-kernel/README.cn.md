@@ -16,7 +16,7 @@
 
 1. 克隆仓库到本地 `git clone --depth 1 https://github.com/ophub/amlogic-s9xxx-armbian.git`
 
-2. 安装必要的软件包（脚本仅在 x86_64 Ubuntu-20.04/22.04 下做过测试）
+2. 安装必要的软件包（脚本仅在 Ubuntu-20.04/22.04(X86 和 Arm 均支持) 下做过测试）
 
 ```yaml
 sudo apt-get update -y
@@ -29,6 +29,8 @@ sudo apt-get install -y $(cat compile-kernel/tools/script/ubuntu2204-build-armbi
 
 - ### 在 Armbian 系统下运行
 
+可以在 [Armbian](https://github.com/ophub/amlogic-s9xxx-armbian/releases) 原版系统中编译内核，也可以在 Arm64 架构的 Ubuntu/Debian 等系统中通过 [Docker](https://hub.docker.com/u/ophub) 容器运行 Armbian 系统编译内核，编译方法相同。Armbian 系统 Docker 镜像的制作方法可以参考 [armbian_docker](./tools/script/docker) 制作脚本。
+
 1. 更新本地编译环境和配置文件：`armbian-kernel -u`
 
 2. 编译内核：运行 `armbian-kernel -k 5.15.100` 等指定参数命令即可编译内核。脚本会自动下载安装编译环境和内核源码并做好全部设置。打包好的内核文件保存在 `/opt/kernel/compile-kernel/output` 目录里。
@@ -38,13 +40,16 @@ sudo apt-get install -y $(cat compile-kernel/tools/script/ubuntu2204-build-armbi
 | 参数    | 含义        | 说明                             |
 | ------ | ----------- | ------------------------------- |
 | -r     | Repository  | 指定编译内核的源代码仓库。可选择 `github.com` 的内核源代码仓库。例如 `-r unifreq` 等。可设置参数格式为 `owner/repo@branch` 三项组合，参数中的所有者名称 `owner` 为必选参数，内核源代码仓库名称 `/repo` 和 仓库的分支名称 `@branch` 为可选参数。当仅指定所有者名称 `owner` 参数时，将自动匹配所有者的名称为 `linux-5.x.y` 格式且分支为 `main` 的内核源代码仓库。如果仓库名称或分支名称不同，请使用组合方式指定，如 `owner@branch` 或 `owner/repo` 或 `owner/repo@branch`。默认值：`unifreq` |
-| -k     | Kernel      | 指定 kernel 名称，如 `-k 5.15.100` . 多个内核使用 `_` 进行连接，如 `-k 5.15.100_5.15.50` |
+| -k     | Kernel      | 指定 kernel 名称，如 `-k 5.15.100`。多个内核使用 `_` 进行连接，如 `-k 5.15.100_5.15.50`。使用 `-k all` 代表编译全部主线内核，当前等价于 `-k 5.4.y_5.10.y_5.15.y_6.1.y_6.6.y_6.12.y`，内核列表会随着上游内核源码仓库 [unifreq](https://github.com/unifreq) 的维护情况动态调整。 |
 | -a     | AutoKernel  | 设置是否自动采用同系列最新版本内核。当为 `true` 时，将自动查找在 `-k` 中指定的内核如 `5.15.100` 的同系列是否有更新的版本，如有 `5.15.100` 之后的最新版本时，将自动更换为最新版。设置为 `false` 时将编译指定版本内核。默认值：`true` |
 | -m     | MakePackage | 设置制作内核的包列表。当设置为 `all` ，将制作 `Image, modules, dtbs` 的全部文件。当设置值为 `dtbs` 时仅制作 3 个 dtbs 文件。默认值：`all` |
 | -p     | AutoPatch   | 设置是否使用自定义内核补丁。当设置为 `true` 时将使用 [tools/patch](tools/patch) 目录下的内核补丁，详细说明参考[内核补丁添加方法](../documents/README.cn.md#9-编译-armbian-内核)。默认值：`false` |
 | -n     | CustomName  | 设置内核自定义签名。当设置为 `-ophub` ，生成的内核名称为 `5.15.100-ophub` 。设置自定义签名时请勿包含空格。默认值：`-ophub` |
 | -t     | Toolchain   | 设置编译内核的工具链。可选项：`clang / gcc / gcc-<version>`。默认值：`gcc` |
 | -c     | Compress    | 设置内核中 initrd 使用的压缩格式。可选项：`xz / gzip / zstd / lzma`。默认值：`xz` |
+| -d     | DeleteSource | 设置内核编译结束后是否删除内核源码。可选项：`true / false`。默认值：`false` |
+| -s     | SilentLog   | 设置内核编译时是否使用静默模式减少日志输出。可选项：`true / false`。默认值：`false` |
+
 
 - `sudo ./recompile` : 使用默认配置编译内核。
 - `sudo ./recompile -k 5.15.100` : 使用默认配置，并通过 `-k` 进行指定需要编译的内核版本，多个版本同时编译时使用 `_` 进行连接。
@@ -59,7 +64,7 @@ sudo apt-get install -y $(cat compile-kernel/tools/script/ubuntu2204-build-armbi
 
 1. 在 [Action](https://github.com/ophub/amlogic-s9xxx-armbian/actions) 页面里选择 ***`Compile the kernel`*** ，点击 ***`Run workflow`*** 按钮即可编译。
 
-2. 详见使用模板 [compile-kernel.yml](../.github/workflows/compile-kernel.yml) 。代码如下:
+2. 详见使用模板 [compile-kernel-on-a-server.yml](../.github/workflows/compile-kernel-on-a-server.yml) 。代码如下:
 
 ```yaml
 - name: Compile the kernel
@@ -94,6 +99,9 @@ uses: YOUR-REPO/amlogic-s9xxx-armbian@main
 | kernel_patch      | false            | 设置自定义内核补丁目录。 |
 | auto_patch        | false            | 设置是否使用自定义内核补丁。默认值为 `false`。功能参考 `-p` |
 | compress_format   | xz               | 设置内核中 initrd 使用的压缩格式。默认值为 `xz`。功能参考 `-c` |
+| delete_source     | false            | 设置内核编译结束后是否删除内核源码。默认值为 `false`。功能参考 `-d` |
+| silent_log        | false            | 设置内核编译时是否使用静默模式减少日志输出。默认值为 `false`。功能参考 `-s` |
+
 
 - ### GitHub Action 输出变量说明
 

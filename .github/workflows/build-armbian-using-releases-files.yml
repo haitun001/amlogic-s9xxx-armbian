@@ -1,10 +1,9 @@
 #==========================================================================
-# Description: Build Armbian
+# Description: Build Armbian using releases files
 # Copyright (C) 2021 https://github.com/ophub/amlogic-s9xxx-armbian
-# Copyright (C) 2024 https://github.com/dy008/amlogic-s9xxx-armbian
 #==========================================================================
 
-name: Build Homeassistant
+name: Build Armbian using releases files
 
 on:
   repository_dispatch:
@@ -13,7 +12,7 @@ on:
       set_release:
         description: "Select OS Release."
         required: false
-        default: "bookworm"
+        default: "jammy"
         type: choice
         options:
           - jammy
@@ -31,9 +30,13 @@ on:
           - s912-x92_s922x_s922x-ct2000_s922x-reva_seewo-sv21_smart-am40_smart-am60_station-m1_sw799_swan1-w28
           - tanix-tx6_tb-ls3399_tn3399_tpm312_tqc-a01_tvi3315a_vplus_wxy-oec_xiaobao_yskj_zcube1-max_zk-r39a_zysj
           - a311d
+          - a311d-oes
+          - alark35-3500
+          - anas3035
           - beikeyun
           - chainedbox
           - crrc
+          - dc-a588
           - dg3399
           - dg-tn3568
           - dlfr100
@@ -160,6 +163,8 @@ on:
           - smart-am40
           - smart-am60
           - station-m1
+          - station-m2
+          - sv-33a6x
           - swan1-w28
           - sw799
           - tanix-tx6
@@ -178,7 +183,7 @@ on:
       armbian_kernel:
         description: "Select kernel version."
         required: false
-        default: "6.1.y_6.12.y"
+        default: "5.15.y_6.1.y"
         type: choice
         options:
           - 5.4.y
@@ -233,15 +238,14 @@ on:
       builder_name:
         description: "Set Armbian builder signature."
         required: false
-        default: "dy008"
+        default: "ophub"
         type: choice
         options:
           - ophub
-          - dy008
+          - angel
 
 env:
   TZ: America/New_York
-  ROOTFS_SCRIPT: compile-kernel/tools/script/armbian_rootfs.sh
 
 jobs:
   build:
@@ -259,7 +263,7 @@ jobs:
         run: |
           docker rmi $(docker images -q) 2>/dev/null
           [[ -n "${AGENT_TOOLSDIRECTORY}" ]] && sudo rm -rf "${AGENT_TOOLSDIRECTORY}"
-          sudo rm -rf /usr/share/dotnet /etc/apt/sources.list.d /usr/local/lib/android 2>/dev/null
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android 2>/dev/null
           sudo swapoff -a
           sudo rm -f /swapfile /mnt/swapfile
           sudo -E apt-get -y update
@@ -292,62 +296,47 @@ jobs:
           sudo chown -R runner.runner /builder
           df -Th
 
-      - name: Download source code
+      - name: Download Armbian from Releases
         id: down
         working-directory: /builder
         if: ${{ steps.init.outputs.status }} == 'success' && !cancelled()
         run: |
-          df -hT ${PWD}
-          git clone -q --single-branch --depth=1 --branch=main https://github.com/armbian/build.git build
+          armbian_buildpath="build/output/images"
+          [[ -d "${armbian_buildpath}" ]] || mkdir -p "${armbian_buildpath}"
           ln -sf /builder/build ${GITHUB_WORKSPACE}/build
           ln -sf /builder/build /home/runner/work/_actions/ophub/amlogic-s9xxx-armbian/main/build
-          # 下载扩展的安装homeasssistant脚本
-          wget -P ./build/extensions https://raw.githubusercontent.com/armbian/os/main/userpatches/extensions/docker-ce.sh
-          wget -P ./build/extensions https://raw.githubusercontent.com/armbian/os/main/userpatches/extensions/ha.sh
-          # 修改ha.sh脚本中的命令以停止internet host IP地址检测
-          sed -i "/sed -i \"\/update-grub\/d\"/a\sed -i \"s\/while ! ping\/while   ping\/\" homeassistant-supervised/DEBIAN/postinst" ./build/extensions/ha.sh
+
+          latest_version=$(curl -s \
+                -H "Accept: application/vnd.github+json" \
+                -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+                https://api.github.com/repos/${GITHUB_REPOSITORY}/releases?per_page=100 | \
+                jq -r --arg RTK "Armbian_${{ inputs.set_release }}_" \
+                --arg BOARD "-trunk_" \
+                '[.[] | select(.tag_name | contains($RTK))] |
+                map(.assets[] | select(.browser_download_url | contains($BOARD) and endswith(".img.gz"))) |
+                sort_by(.updated_at) |
+                reverse |
+                .[0] |
+                {data: .updated_at, url: .browser_download_url}')
+
+          [[ -z "${latest_version}" || "${latest_version}" == "null" ]] && echo "Invalid Armbian image download address." && exit 1
+          latest_updated_at="$(echo ${latest_version} | jq -r '.data')"
+          latest_url="$(echo ${latest_version} | jq -r '.url')"
+
+          armbian_filename="${latest_url##*/}"
+          curl -fsSL "${latest_url}" -o "${armbian_buildpath}/${armbian_filename}"
+          [[ "${?}" -ne "0" ]] && echo "Invalid Armbian image download address." && exit 1
+          cd "${armbian_buildpath}" && gzip -df *.img.gz && sync
+
+          echo "build_tag=Armbian_${{ inputs.set_release }}_${{ inputs.armbian_storage }}_$(date +"%Y.%m")" >> ${GITHUB_OUTPUT}
           echo "status=success" >> ${GITHUB_OUTPUT}
 
-      - name: Compile Armbian [ ${{ inputs.set_release }} ]
-        id: compile
-        working-directory: /builder
-        if: ${{ steps.down.outputs.status }} == 'success' && !cancelled()
-        run: |
-          # Compile method and parameter description: https://docs.armbian.com/Developer-Guide_Build-Options
-          cd build/
-              ./compile.sh RELEASE=${{ inputs.set_release }} BOARD=odroidn2 BRANCH=current ENABLE_EXTENSIONS="ha" BUILD_MINIMAL=no \
-                           BUILD_ONLY=default HOST=armbian BUILD_DESKTOP=no EXPERT=yes KERNEL_CONFIGURE=no \
-                           COMPRESS_OUTPUTIMAGE="sha" SHARE_LOG=yes
-          echo "status=success" >> ${GITHUB_OUTPUT}
-
-      - name: Organize files and clear space
-        id: clean
-        if: ${{ steps.compile.outputs.status }} == 'success' && !cancelled()
-        run: |
-          # Organize and keep essential files, delete unnecessary files
-          chmod +x ${ROOTFS_SCRIPT}
-          ${ROOTFS_SCRIPT} -v ${{ inputs.set_release }}
-
-          # Output cleaning result information
-          df -hT ${PWD}
-          echo "build_tag=Armbian_HassIoSupervisor_${{ inputs.set_release }}_${{ inputs.armbian_storage }}_$(date +"%Y.%m")" >> ${GITHUB_OUTPUT}
-          echo "status=success" >> ${GITHUB_OUTPUT}
-
-      - name: Upload Armbian image to Release
-        uses: ncipollo/release-action@main
-        if: ${{ steps.clean.outputs.status }} == 'success' && !cancelled()
-        with:
-          tag: ${{ steps.clean.outputs.build_tag }}
-          artifacts: build/output/images/*
-          allowUpdates: true
-          token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Rebuild Armbian
+      - name: Rebuild Armbian [ ${{ inputs.set_release }} ]
         uses: ophub/amlogic-s9xxx-armbian@main
-        if: ${{ steps.clean.outputs.status }} == 'success' && !cancelled()
+        if: ${{ steps.down.outputs.status }} == 'success' && !cancelled()
         with:
           build_target: armbian
-          armbian_path: build/output/images/*.img.gz
+          armbian_path: build/output/images/*.img
           armbian_board: ${{ inputs.armbian_board }}
           armbian_kernel: ${{ inputs.armbian_kernel }}
           auto_kernel: ${{ inputs.auto_kernel }}
@@ -356,18 +345,18 @@ jobs:
           armbian_fstype: ${{ inputs.armbian_fstype }}
           builder_name: ${{ inputs.builder_name }}
 
-      - name: Upload Rebuild image to Release
+      - name: Upload Armbian image to Release
         uses: ncipollo/release-action@main
         if: ${{ env.PACKAGED_STATUS }} == 'success' && !cancelled()
         with:
-          tag: ${{ steps.clean.outputs.build_tag }}
+          tag: ${{ steps.down.outputs.build_tag }}
           artifacts: ${{ env.PACKAGED_OUTPUTPATH }}/*
           allowUpdates: true
           removeArtifacts: false
           replacesArtifacts: true
           token: ${{ secrets.GITHUB_TOKEN }}
           body: |
-            ### Armbian For Homeassistant Supervisor Image information
+            ### Armbian Image information
             - Default username: root
             - Default password: 1234
             - Install command: armbian-install

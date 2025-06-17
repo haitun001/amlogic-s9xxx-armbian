@@ -17,6 +17,7 @@ Github Actions 是 Microsoft 推出的一项服务，它提供了性能配置非
     - [5.2 定时编译](#52-定时编译)
     - [5.3 自定义默认系统配置](#53-自定义默认系统配置)
     - [5.4 使用逻辑卷扩大 Github Actions 编译空间](#54-使用逻辑卷扩大-github-actions-编译空间)
+    - [5.5 制作 Armbian Docker 镜像](#55-制作-armbian-docker-镜像)
   - [6. 保存系统](#6-保存系统)
   - [7. 下载系统](#7-下载系统)
   - [8. 安装 Armbian 到 EMMC](#8-安装-armbian-到-emmc)
@@ -114,7 +115,7 @@ Github Actions 是 Microsoft 推出的一项服务，它提供了性能配置非
 
 ## 4. 个性化 Armbian 系统定制文件说明
 
-系统编译的流程在 [.github/workflows/build-armbian.yml](../.github/workflows/build-armbian.yml) 文件里控制，在 workflows 目录下还有其他 .yml 文件，实现其他不同的功能。编译系统时采用了 Armbian 官方的当前代码进行实时编译，相关参数可以查阅官方文档。
+系统编译的流程在 [.github/workflows/build-armbian-server-image.yml](../.github/workflows/build-armbian-server-image.yml) 文件里控制，在 workflows 目录下还有其他 .yml 文件，实现其他不同的功能。编译系统时采用了 Armbian 官方的当前代码进行实时编译，相关参数可以查阅官方文档。
 
 ```yaml
 - name: Compile Armbian [ ${{ inputs.set_release }} ]
@@ -145,7 +146,7 @@ Github Actions 是 Microsoft 推出的一项服务，它提供了性能配置非
 
 ### 5.2 定时编译
 
-在 [.github/workflows/build-armbian.yml](../../.github/workflows/build-armbian.yml) 文件里，使用 Cron 设置定时编译，5 个不同位置分别代表的意思为 分钟 (0 - 59) / 小时 (0 - 23) / 日期 (1 - 31) / 月份 (1 - 12) / 星期几 (0 - 6)(星期日 - 星期六)。通过修改不同位置的数值来设定时间。系统默认使用 UTC 标准时间，请根据你所在国家时区的不同进行换算。
+在 [.github/workflows/build-armbian-server-image.yml](../../.github/workflows/build-armbian-server-image.yml) 文件里，使用 Cron 设置定时编译，5 个不同位置分别代表的意思为 分钟 (0 - 59) / 小时 (0 - 23) / 日期 (1 - 31) / 月份 (1 - 12) / 星期几 (0 - 6)(星期日 - 星期六)。通过修改不同位置的数值来设定时间。系统默认使用 UTC 标准时间，请根据你所在国家时区的不同进行换算。
 
 ```yaml
 schedule:
@@ -162,7 +163,7 @@ schedule:
 
 ### 5.4 使用逻辑卷扩大 Github Actions 编译空间
 
-Github Actions 编译空间默认是 84G，除去系统和必要软件包外，可用空间在 50G 左右，当编译全部固件时会遇到空间不足的问题，可以使用逻辑卷扩大编译空间至 110G 左右。参考 [.github/workflows/build-armbian.yml](../.github/workflows/build-armbian.yml) 文件里的方法，使用下面的命令创建逻辑卷。并在编译时使用逻辑卷的路径。
+Github Actions 编译空间默认是 84G，除去系统和必要软件包外，可用空间在 50G 左右，当编译全部固件时会遇到空间不足的问题，可以使用逻辑卷扩大编译空间至 110G 左右。参考 [.github/workflows/build-armbian-server-image.yml](../.github/workflows/build-armbian-server-image.yml) 文件里的方法，使用下面的命令创建逻辑卷。并在编译时使用逻辑卷的路径。
 
 ```yaml
 - name: Create simulated physical disk
@@ -184,9 +185,13 @@ Github Actions 编译空间默认是 84G，除去系统和必要软件包外，�
     df -Th
 ```
 
+### 5.5 制作 Armbian Docker 镜像
+
+Armbian 系统 [Docker](https://hub.docker.com/u/ophub) 镜像的制作方法可以参考 [armbian_docker](../compile-kernel/tools/script/docker) 制作脚本。
+
 ## 6. 保存系统
 
-系统保存的设置也在 [.github/workflows/build-armbian.yml](../../.github/workflows/build-armbian.yml) 文件里控制。我们将编译好的系统通过脚本自动上传到 github 官方提供的 Releases 里面。
+系统保存的设置也在 [.github/workflows/build-armbian-server-image.yml](../../.github/workflows/build-armbian-server-image.yml) 文件里控制。我们将编译好的系统通过脚本自动上传到 github 官方提供的 Releases 里面。
 
 ```yaml
 - name: Upload Armbian image to Release
@@ -436,7 +441,7 @@ cd rtl8189ES_linux
 gun_file="arm-gnu-toolchain-13.3.rel1-aarch64-aarch64-none-elf.tar.xz"
 toolchain_path="/usr/local/toolchain"
 toolchain_name="gcc"
-export CROSS_COMPILE="${toolchain_path}/${gun_file//.tar.xz/}/bin/aarch64-none-elf-"
+export CROSS_COMPILE="${toolchain_path}/${gun_file//.tar.xz/}/bin/aarch64-none-linux-gnu-"
 export CC="${CROSS_COMPILE}gcc"
 export LD="${CROSS_COMPILE}ld.bfd"
 export ARCH="arm64"
@@ -1407,7 +1412,7 @@ armbian-install
 
 #### 12.15.4 添加流程控制文件
 
-在 [yml 工作流控制文件](../../.github/workflows/build-armbian.yml) 的 `armbian_board` 中添加对应的 `BOARD` 选项，支持在 github.com 的 `Actions` 中进行使用。
+在 [yml 工作流控制文件](../../.github/workflows/build-armbian-server-image.yml) 的 `armbian_board` 中添加对应的 `BOARD` 选项，支持在 github.com 的 `Actions` 中进行使用。
 
 ### 12.16 如何解决写入 eMMC 时 I/O 错误的问题
 

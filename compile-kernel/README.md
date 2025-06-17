@@ -16,7 +16,7 @@ Pre-compiled kernels are available in the [Releases](https://github.com/ophub/ke
 
 1. Clone the repository to local `git clone --depth 1 https://github.com/ophub/amlogic-s9xxx-armbian.git`
 
-2. Install necessary software packages (the script has only been tested under x86_64 Ubuntu-20.04/22.04)
+2. Install necessary software packages (the script has only been tested under Ubuntu-20.04/22.04(Supported by both X86 and Arm)):
 
 ```yaml
 sudo apt-get update -y
@@ -27,8 +27,9 @@ sudo apt-get install -y $(cat compile-kernel/tools/script/ubuntu2204-build-armbi
 
 3. Go to the `~/amlogic-s9xxx-armbian` root directory, and then run `sudo ./recompile -k 5.15.100` or other specified parameter commands to compile the kernel. The script will automatically download and install the compilation environment and kernel source code, and make all settings. The packaged kernel files are saved in the `compile-kernel/output` directory.
 
-
 - ### Running on the Armbian system
+
+You can compile the kernel in the official [Armbian](https://github.com/ophub/amlogic-s9xxx-armbian/releases) system, or run the Armbian system in a [Docker](https://hub.docker.com/u/ophub) container on an Arm64-based Ubuntu/Debian system to compile the kernel—the compilation method is the same. The method for creating the Docker image of the Armbian system can refer to the [armbian_docker](./tools/script/docker) build script.
 
 1. Update local compilation environment and configuration files: `armbian-kernel -u`
 
@@ -39,13 +40,15 @@ sudo apt-get install -y $(cat compile-kernel/tools/script/ubuntu2204-build-armbi
 | Parameter | Meaning      | Description |
 | --------- | ----------- | ----------- |
 | -r        | Repository  | Specifies the source code repository for compiling the kernel. You can choose the kernel source code repository from `github.com`, such as `-r unifreq`. The parameter format can be a combination of three items `owner/repo@branch`. The owner's name `owner` is a mandatory parameter, the kernel source code repository name `/repo` and the branch name of the repository `@branch` are optional parameters. When only specifying the owner's name `owner`, it will automatically match the kernel source code repository with the name format `linux-5.x.y` and the branch `main` of the owner. If the repository name or branch name is different, please specify it in combination, such as `owner@branch` or `owner/repo` or `owner/repo@branch`. Default value: `unifreq` |
-| -k        | Kernel      | Specifies the kernel name, such as `-k 5.15.100`. Multiple kernels are connected with `_`, such as `-k 5.15.100_5.15.50` |
+| -k        | Kernel      | Specifies the kernel name, such as `-k 5.15.100`. Multiple kernels are connected with `_`, such as `-k 5.15.100_5.15.50`. Using `-k all` means compiling all mainline kernels, which is currently equivalent to `-k 5.4.y_5.10.y_5.15.y_6.1.y_6.6.y_6.12.y`. The kernel list is dynamically adjusted based on the maintenance status of the upstream kernel source repository [unifreq](https://github.com/unifreq). |
 | -a        | AutoKernel  | Sets whether to automatically adopt the latest version of the same series of kernels. When it is `true`, it will automatically search whether there is a newer version of the same series of kernels specified in `-k`, such as `5.15.100`. If there is a latest version after `5.15.100`, it will automatically switch to the latest version. When set to `false`, it will compile the specified version of the kernel. Default value: `true` |
 | -m        | MakePackage | Sets the package list for making the kernel. When set to `all`, it will make all the files of `Image, modules, dtbs`. When the setting value is `dtbs`, only 3 dtbs files will be produced. Default value: `all` |
 | -p        | AutoPatch   | Sets whether to use custom kernel patches. When set to `true`, it will use the kernel patches in the [tools/patch](tools/patch) directory. For detailed instructions, refer to [how to add kernel patches](../documents/README.md#9-compiling-armbian-kernel). Default value: `false` |
 | -n        | CustomName  | Sets the custom signature of the kernel. When set to `-ophub`, the generated kernel name is `5.15.100-ophub`. Please do not include spaces when setting custom signatures. Default value: `-ophub` |
 | -t        | Toolchain   | Sets the toolchain for compiling the kernel. Options: `clang / gcc / gcc-<version>`. Default value: `gcc` |
 | -c        | Compress    | Set the compression format used for initrd in the kernel. Options: `xz / gzip / zstd / lzma`. Default value: `xz` |
+| -d        | DeleteSource | Set whether to delete the kernel source code after the kernel compilation is completed. Options: `true / false`. Default value: `false` |
+| -s        | SilentLog   | Set whether to use silent mode to reduce log output when compiling the kernel. Options: `true / false`. Default value: `false` |
 
 
 - `sudo ./recompile`: Compile the kernel using the default configuration.
@@ -61,7 +64,7 @@ sudo apt-get install -y $(cat compile-kernel/tools/script/ubuntu2204-build-armbi
 
 1. In the [Action](https://github.com/ophub/amlogic-s9xxx-armbian/actions) page, select ***`Compile the kernel`*** and click the ***`Run workflow`*** button to compile.
 
-2. See the use of the template [compile-kernel.yml](../.github/workflows/compile-kernel.yml). The code is as follows:
+2. See the use of the template [compile-kernel-on-a-server.yml](../.github/workflows/compile-kernel-on-a-server.yml). The code is as follows:
 
 ```yaml
 - name: Compile the kernel
@@ -96,6 +99,9 @@ These parameters correspond to the `local compilation commands`. Please refer to
 | kernel_patch     | false         | Sets the directory for custom kernel patches. |
 | auto_patch       | false         | Sets whether to use custom kernel patches. Default value is `false`. Refer to `-p` for functionality. |
 | compress_format  | xz            | Set the compression format used for initrd in the kernel. Default value is `xz`. Refer to `-c` for functionality. |
+| delete_source    | false         | Set whether to delete the kernel source code after the kernel compilation is completed. Default value is `false`. Refer to `-d` for functionality. |
+| silent_log       | false         | Set whether to use silent mode to reduce log output when compiling the kernel. Default value is `false`. Refer to `-s` for functionality. |
+
 
 - ### GitHub Action Output Variables
 
